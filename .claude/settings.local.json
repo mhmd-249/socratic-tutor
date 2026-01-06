@@ -11,7 +11,9 @@
       "Bash(poetry run alembic:*)",
       "Bash(python3 -m alembic revision:*)",
       "Bash(make migrate:*)",
-      "Bash(docker-compose exec:*)"
+      "Bash(docker-compose exec:*)",
+      "Bash(python -m alembic:*)",
+      "Bash(poetry run pytest:*)"
     ]
   }
 }

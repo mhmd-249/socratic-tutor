@@ -24,8 +24,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set the sqlalchemy.url from settings
-config.set_main_option("sqlalchemy.url", str(settings.DATABASE_URL))
+# Set the sqlalchemy.url from settings (convert to async driver)
+database_url = str(settings.DATABASE_URL).replace(
+    "postgresql://", "postgresql+asyncpg://"
+)
+config.set_main_option("sqlalchemy.url", database_url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

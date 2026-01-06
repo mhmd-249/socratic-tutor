@@ -53,6 +53,18 @@ python -m scripts.ingest_book \
   --overlap 80
 ```
 
+### Force Re-ingestion
+
+Automatically delete existing book and re-ingest (useful for scripts/CI):
+
+```bash
+python -m scripts.ingest_book \
+  --pdf path/to/your/book.pdf \
+  --title "Introduction to Machine Learning" \
+  --author "John Doe" \
+  --force
+```
+
 ## Command-Line Options
 
 | Option | Required | Default | Description |
@@ -64,8 +76,24 @@ python -m scripts.ingest_book \
 | `--target-chunk-size` | No | 600 | Target size for text chunks (in tokens) |
 | `--max-chunk-size` | No | 800 | Maximum size for text chunks (in tokens) |
 | `--overlap` | No | 100 | Number of tokens to overlap between chunks |
+| `--force` | No | False | Automatically delete existing book and re-ingest (non-interactive) |
 
 ## How It Works
+
+### 0. Idempotency Check
+
+Before ingestion, the script checks if a book with the same title already exists:
+
+**Interactive Mode (default):**
+- Prompts user with three options:
+  - **[s] Skip**: Abort ingestion, no changes made
+  - **[d] Delete**: Delete existing book and all related data (chapters, chunks), then re-ingest
+  - **[c] Create duplicate**: Proceed with ingestion, creating a duplicate entry
+
+**Force Mode (`--force` flag):**
+- Automatically deletes existing book and re-ingests
+- No user prompt (useful for automation/CI)
+- Logs warning that book is being replaced
 
 ### 1. PDF Text Extraction
 

@@ -161,6 +161,7 @@ class BookIngestionPipeline:
         author: str,
         description: str = "",
         chunk_config: ChunkConfig | None = None,
+        force: bool = False,
     ):
         """
         Initialize ingestion pipeline.
@@ -171,19 +172,117 @@ class BookIngestionPipeline:
             author: Book author
             description: Book description
             chunk_config: Optional chunking configuration
+            force: If True, automatically delete existing book and re-ingest
         """
         self.pdf_path = pdf_path
         self.title = title
         self.author = author
         self.description = description or f"Book: {title} by {author}"
+        self.force = force
 
         self.chunking_service = ChunkingService(chunk_config)
         self.embedding_service = EmbeddingService()
+
+    async def _check_existing_book(self) -> uuid.UUID | None:
+        """
+        Check if a book with the same title already exists.
+
+        Returns:
+            UUID of existing book, or None if not found
+        """
+        async with AsyncSessionLocal() as session:
+            book_repo = BookRepository(session)
+            existing_books = await book_repo.get_by_title(self.title)
+
+            # Look for exact match (case-insensitive)
+            for book in existing_books:
+                if book.title.lower() == self.title.lower():
+                    return book.id
+
+            return None
+
+    async def _delete_existing_book(self, book_id: uuid.UUID):
+        """
+        Delete an existing book and all related data.
+
+        Args:
+            book_id: UUID of book to delete
+        """
+        logger.info(f"Deleting existing book and all related data...")
+
+        async with AsyncSessionLocal() as session:
+            book_repo = BookRepository(session)
+
+            # Delete book (cascades to chapters, chunks, etc.)
+            deleted = await book_repo.delete(book_id)
+            await session.commit()
+
+            if deleted:
+                logger.info("✓ Existing book deleted successfully")
+            else:
+                logger.warning("⚠ Book not found (may have been already deleted)")
+
+    def _prompt_user_action(self) -> str:
+        """
+        Prompt user for action when book already exists.
+
+        Returns:
+            User's choice: 'skip', 'delete', or 'duplicate'
+        """
+        print("\n" + "=" * 60)
+        print(f"⚠️  BOOK ALREADY EXISTS: '{self.title}'")
+        print("=" * 60)
+        print("\nWhat would you like to do?")
+        print("  [s] Skip - Don't ingest this book")
+        print("  [d] Delete existing and re-ingest")
+        print("  [c] Create duplicate anyway")
+        print()
+
+        while True:
+            choice = input("Enter your choice (s/d/c): ").lower().strip()
+
+            if choice == 's':
+                return 'skip'
+            elif choice == 'd':
+                return 'delete'
+            elif choice == 'c':
+                return 'duplicate'
+            else:
+                print("Invalid choice. Please enter 's', 'd', or 'c'.")
 
     async def run(self):
         """Run the complete ingestion pipeline."""
         logger.info(f"Starting book ingestion: {self.title}")
         logger.info(f"PDF: {self.pdf_path}")
+
+        # Check for existing book
+        existing_book_id = await self._check_existing_book()
+
+        if existing_book_id:
+            if self.force:
+                # Force mode: automatically delete and re-ingest
+                logger.warning(
+                    f"⚠️  Book '{self.title}' already exists (ID: {existing_book_id})"
+                )
+                logger.info("🔄 Force mode enabled - deleting and re-ingesting")
+                await self._delete_existing_book(existing_book_id)
+            else:
+                # Interactive mode: prompt user
+                action = self._prompt_user_action()
+
+                if action == 'skip':
+                    logger.info("⏭️  Skipping ingestion (user choice)")
+                    print("\n✓ Skipped - no changes made\n")
+                    return
+
+                elif action == 'delete':
+                    await self._delete_existing_book(existing_book_id)
+                    logger.info("♻️  Re-ingesting book after deletion")
+
+                elif action == 'duplicate':
+                    logger.warning(
+                        "⚠️  Creating duplicate book (user requested)"
+                    )
 
         # Step 1: Extract text from PDF
         logger.info("Step 1: Extracting text from PDF...")
@@ -354,6 +453,11 @@ async def main():
         default=100,
         help="Overlap between chunks in tokens (default: 100)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Automatically delete existing book and re-ingest (non-interactive)",
+    )
 
     args = parser.parse_args()
 
@@ -377,6 +481,7 @@ async def main():
         author=args.author,
         description=args.description,
         chunk_config=chunk_config,
+        force=args.force,
     )
 
     try:

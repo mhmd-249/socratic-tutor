@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@14 frontend --typescript --tailwind --app --src-dir --import-alias \"@/*\" --no-git)",
+      "Bash(npx create-next-app@14:*)",
+      "Bash(npm install:*)",
+      "Bash(poetry add:*)",
+      "Bash(poetry env use:*)",
+      "Bash(tree:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(poetry run alembic:*)",
+      "Bash(python3 -m alembic revision:*)",
+      "Bash(make migrate:*)",
+      "Bash(docker-compose exec:*)"
+    ]
+  }
+}

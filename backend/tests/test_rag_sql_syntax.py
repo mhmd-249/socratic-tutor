@@ -12,7 +12,7 @@ def test_hybrid_search_sql_syntax():
     chapter_id = uuid4()
     chapter_filter_sql = f"AND c.chapter_id = '{str(chapter_id)}'"
 
-    # This should compile without errors
+    # This should compile without errors using named parameters
     query_sql = text(f"""
         WITH semantic_scores AS (
             SELECT
@@ -28,9 +28,9 @@ def test_hybrid_search_sql_syntax():
         keyword_scores AS (
             SELECT
                 c.id,
-                ts_rank(c.content_tsv, websearch_to_tsquery('english', $1)) as keyword_score
+                ts_rank(c.content_tsv, websearch_to_tsquery('english', :query)) as keyword_score
             FROM chunks c
-            WHERE c.content_tsv @@ websearch_to_tsquery('english', $1)
+            WHERE c.content_tsv @@ websearch_to_tsquery('english', :query)
                 {chapter_filter_sql}
         ),
         combined AS (
@@ -42,8 +42,8 @@ def test_hybrid_search_sql_syntax():
                 s.chunk_index,
                 s.semantic_score,
                 COALESCE(k.keyword_score, 0.0) as keyword_score,
-                ($2 * s.semantic_score +
-                 $3 * COALESCE(k.keyword_score, 0.0)) as combined_score
+                (:semantic_weight * s.semantic_score +
+                 :keyword_weight * COALESCE(k.keyword_score, 0.0)) as combined_score
             FROM semantic_scores s
             LEFT JOIN keyword_scores k ON s.id = k.id
         )
@@ -64,12 +64,18 @@ def test_hybrid_search_sql_syntax():
         INNER JOIN chapters ch ON c.chapter_id = ch.id
         INNER JOIN books b ON ch.book_id = b.id
         ORDER BY c.combined_score DESC
-        LIMIT $4
+        LIMIT :limit
     """)
 
     # Verify it's a valid text object
     assert query_sql is not None
     assert hasattr(query_sql, 'text')
+
+    # Verify named parameters are present in the query
+    assert ':query' in query_sql.text
+    assert ':semantic_weight' in query_sql.text
+    assert ':keyword_weight' in query_sql.text
+    assert ':limit' in query_sql.text
 
 
 def test_hybrid_search_sql_syntax_no_chapter_filter():
@@ -77,7 +83,7 @@ def test_hybrid_search_sql_syntax_no_chapter_filter():
     embedding_str = "[0.1, 0.2, 0.3]"
     chapter_filter_sql = ""
 
-    # This should also compile without errors
+    # This should also compile without errors using named parameters
     query_sql = text(f"""
         WITH semantic_scores AS (
             SELECT
@@ -93,9 +99,9 @@ def test_hybrid_search_sql_syntax_no_chapter_filter():
         keyword_scores AS (
             SELECT
                 c.id,
-                ts_rank(c.content_tsv, websearch_to_tsquery('english', $1)) as keyword_score
+                ts_rank(c.content_tsv, websearch_to_tsquery('english', :query)) as keyword_score
             FROM chunks c
-            WHERE c.content_tsv @@ websearch_to_tsquery('english', $1)
+            WHERE c.content_tsv @@ websearch_to_tsquery('english', :query)
                 {chapter_filter_sql}
         ),
         combined AS (
@@ -107,8 +113,8 @@ def test_hybrid_search_sql_syntax_no_chapter_filter():
                 s.chunk_index,
                 s.semantic_score,
                 COALESCE(k.keyword_score, 0.0) as keyword_score,
-                ($2 * s.semantic_score +
-                 $3 * COALESCE(k.keyword_score, 0.0)) as combined_score
+                (:semantic_weight * s.semantic_score +
+                 :keyword_weight * COALESCE(k.keyword_score, 0.0)) as combined_score
             FROM semantic_scores s
             LEFT JOIN keyword_scores k ON s.id = k.id
         )
@@ -129,9 +135,15 @@ def test_hybrid_search_sql_syntax_no_chapter_filter():
         INNER JOIN chapters ch ON c.chapter_id = ch.id
         INNER JOIN books b ON ch.book_id = b.id
         ORDER BY c.combined_score DESC
-        LIMIT $4
+        LIMIT :limit
     """)
 
     # Verify it's a valid text object
     assert query_sql is not None
     assert hasattr(query_sql, 'text')
+
+    # Verify named parameters are present
+    assert ':query' in query_sql.text
+    assert ':semantic_weight' in query_sql.text
+    assert ':keyword_weight' in query_sql.text
+    assert ':limit' in query_sql.text

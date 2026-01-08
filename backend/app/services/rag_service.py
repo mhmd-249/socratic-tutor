@@ -286,7 +286,7 @@ class RAGService:
 
         # Build SQL query with direct embedding interpolation
         # Using f-string for embedding and chapter_id (both safe - not user input)
-        # Using $1, $2, etc. for actual user input (query) and numeric params
+        # Using named parameters for user input (query) and numeric params
         query_sql = text(f"""
             WITH semantic_scores AS (
                 SELECT
@@ -302,9 +302,9 @@ class RAGService:
             keyword_scores AS (
                 SELECT
                     c.id,
-                    ts_rank(c.content_tsv, websearch_to_tsquery('english', $1)) as keyword_score
+                    ts_rank(c.content_tsv, websearch_to_tsquery('english', :query)) as keyword_score
                 FROM chunks c
-                WHERE c.content_tsv @@ websearch_to_tsquery('english', $1)
+                WHERE c.content_tsv @@ websearch_to_tsquery('english', :query)
                     {chapter_filter_sql}
             ),
             combined AS (
@@ -316,8 +316,8 @@ class RAGService:
                     s.chunk_index,
                     s.semantic_score,
                     COALESCE(k.keyword_score, 0.0) as keyword_score,
-                    ($2 * s.semantic_score +
-                     $3 * COALESCE(k.keyword_score, 0.0)) as combined_score
+                    (:semantic_weight * s.semantic_score +
+                     :keyword_weight * COALESCE(k.keyword_score, 0.0)) as combined_score
                 FROM semantic_scores s
                 LEFT JOIN keyword_scores k ON s.id = k.id
             )
@@ -338,13 +338,18 @@ class RAGService:
             INNER JOIN chapters ch ON c.chapter_id = ch.id
             INNER JOIN books b ON ch.book_id = b.id
             ORDER BY c.combined_score DESC
-            LIMIT $4
+            LIMIT :limit
         """)
 
-        # Execute with positional parameters (asyncpg style)
+        # Execute with named parameters (SQLAlchemy with asyncpg)
         result = await self.session.execute(
             query_sql,
-            [query, self.semantic_weight, self.keyword_weight, limit]
+            {
+                "query": query,
+                "semantic_weight": self.semantic_weight,
+                "keyword_weight": self.keyword_weight,
+                "limit": limit
+            }
         )
         rows = result.fetchall()
 

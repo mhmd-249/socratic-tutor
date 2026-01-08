@@ -51,18 +51,18 @@ async def test_rag():
         print("=" * 50)
         
         if chapter:
-            from app.schemas.message import MessageInDB
+            from app.schemas.message import MessageResponse
             from datetime import datetime
             
             mock_history = [
-                MessageInDB(
+                MessageResponse(
                     id=UUID('00000000-0000-0000-0000-000000000001'),
                     conversation_id=UUID('00000000-0000-0000-0000-000000000000'),
                     role="user",
                     content="I want to learn about model deployment",
                     created_at=datetime.now()
                 ),
-                MessageInDB(
+                MessageResponse(
                     id=UUID('00000000-0000-0000-0000-000000000002'),
                     conversation_id=UUID('00000000-0000-0000-0000-000000000000'),
                     role="assistant", 
@@ -78,9 +78,9 @@ async def test_rag():
                 top_k=3
             )
             
-            print(f"Chapter: {context.chapter_title}")
+            print(f"Chapter: {context.chapter_info}")
             print(f"Retrieved {len(context.chunks)} chunks")
-            print(f"\nFormatted context preview:\n{context.formatted_content[:500]}...")
+            print(f"\nFormatted context preview:\n{str(context.to_dict())[:500]}...")
         
         print("\n" + "=" * 50)
         print("✅ RAG Service tests completed!")

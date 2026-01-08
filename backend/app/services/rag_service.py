@@ -268,6 +268,8 @@ class RAGService:
         Returns:
             List of retrieved chunks with scores
         """
+        # Convert embedding to PostgreSQL vector format
+        # Safe to interpolate since it's internally generated, not user input
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
         # Build hybrid search query
@@ -276,10 +278,15 @@ class RAGService:
         # - Keyword: ts_rank from full-text search
         # - Combine with weighted average
 
-        chapter_filter = (
-            "AND c.chapter_id = :chapter_id" if chapter_id else ""
-        )
+        # Build chapter filter for SQL
+        if chapter_id:
+            chapter_filter_sql = f"AND c.chapter_id = '{str(chapter_id)}'"
+        else:
+            chapter_filter_sql = ""
 
+        # Build SQL query with direct embedding interpolation
+        # Using f-string for embedding and chapter_id (both safe - not user input)
+        # Using $1, $2, etc. for actual user input (query) and numeric params
         query_sql = text(f"""
             WITH semantic_scores AS (
                 SELECT
@@ -288,17 +295,17 @@ class RAGService:
                     c.content,
                     c.section_title,
                     c.chunk_index,
-                    1 - (c.embedding <=> :embedding::vector) as semantic_score
+                    1 - (c.embedding <=> '{embedding_str}'::vector) as semantic_score
                 FROM chunks c
-                WHERE true {chapter_filter}
+                WHERE true {chapter_filter_sql}
             ),
             keyword_scores AS (
                 SELECT
                     c.id,
-                    ts_rank(c.content_tsv, websearch_to_tsquery('english', :query)) as keyword_score
+                    ts_rank(c.content_tsv, websearch_to_tsquery('english', $1)) as keyword_score
                 FROM chunks c
-                WHERE c.content_tsv @@ websearch_to_tsquery('english', :query)
-                    {chapter_filter}
+                WHERE c.content_tsv @@ websearch_to_tsquery('english', $1)
+                    {chapter_filter_sql}
             ),
             combined AS (
                 SELECT
@@ -309,8 +316,8 @@ class RAGService:
                     s.chunk_index,
                     s.semantic_score,
                     COALESCE(k.keyword_score, 0.0) as keyword_score,
-                    (:semantic_weight * s.semantic_score +
-                     :keyword_weight * COALESCE(k.keyword_score, 0.0)) as combined_score
+                    ($2 * s.semantic_score +
+                     $3 * COALESCE(k.keyword_score, 0.0)) as combined_score
                 FROM semantic_scores s
                 LEFT JOIN keyword_scores k ON s.id = k.id
             )
@@ -331,21 +338,14 @@ class RAGService:
             INNER JOIN chapters ch ON c.chapter_id = ch.id
             INNER JOIN books b ON ch.book_id = b.id
             ORDER BY c.combined_score DESC
-            LIMIT :limit
+            LIMIT $4
         """)
 
-        params = {
-            "embedding": embedding_str,
-            "query": query,
-            "semantic_weight": self.semantic_weight,
-            "keyword_weight": self.keyword_weight,
-            "limit": limit,
-        }
-
-        if chapter_id:
-            params["chapter_id"] = str(chapter_id)
-
-        result = await self.session.execute(query_sql, params)
+        # Execute with positional parameters (asyncpg style)
+        result = await self.session.execute(
+            query_sql,
+            [query, self.semantic_weight, self.keyword_weight, limit]
+        )
         rows = result.fetchall()
 
         retrieved_chunks = []

@@ -15,14 +15,29 @@ def create_application() -> FastAPI:
         version="0.1.0",
     )
 
-    # Configure CORS
+    # Configure CORS - MUST be added before routes
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["*"],
-        expose_headers=["*"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "Accept",
+            "Origin",
+            "User-Agent",
+            "DNT",
+            "Cache-Control",
+            "X-Requested-With",
+        ],
+        expose_headers=[
+            "Content-Length",
+            "Content-Type",
+            "Cache-Control",
+            "X-Accel-Buffering",
+        ],
+        max_age=600,  # Cache preflight requests for 10 minutes
     )
 
     # Include API router

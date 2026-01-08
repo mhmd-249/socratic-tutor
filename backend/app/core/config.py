@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
 
     # CORS
-    CORS_ORIGINS: list[str] | str = ["http://localhost:3000"]
+    CORS_ORIGINS: list[str] | str = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+    ]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -39,7 +44,8 @@ class Settings(BaseSettings):
             try:
                 return json.loads(v)
             except json.JSONDecodeError:
-                return [v]
+                # Handle comma-separated string
+                return [origin.strip() for origin in v.split(",")]
         return v
 
     # Application

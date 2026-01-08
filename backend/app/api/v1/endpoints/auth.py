@@ -1,5 +1,6 @@
 """Authentication endpoints."""
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from app.repositories.user import UserRepository
 from app.repositories.learning_profile import LearningProfileRepository
 from app.schemas.user import UserResponse
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,49 +45,69 @@ async def auth_callback(
     Returns:
         UserResponse: Created or updated user
     """
-    user_repo = UserRepository(db)
-    learning_profile_repo = LearningProfileRepository(db)
+    try:
+        logger.info(f"Auth callback for supabase_id: {request.supabase_id}")
 
-    # Check if user already exists
-    existing_user = await user_repo.get_by_supabase_id(request.supabase_id)
+        user_repo = UserRepository(db)
+        learning_profile_repo = LearningProfileRepository(db)
 
-    if existing_user:
-        # Update existing user if email or name changed
-        updated_user = await user_repo.update(
-            existing_user.id,
-            {
-                "email": request.email,
-                "name": request.name,
+        # Check if user already exists
+        existing_user = await user_repo.get_by_supabase_id(request.supabase_id)
+
+        if existing_user:
+            logger.info(f"Updating existing user: {existing_user.id}")
+            # Update existing user if email or name changed
+            updated_user = await user_repo.update(
+                existing_user.id,
+                {
+                    "email": request.email,
+                    "name": request.name,
+                },
+            )
+            await db.commit()
+            return updated_user
+
+        # Create new user
+        logger.info(f"Creating new user with email: {request.email}")
+        user_data = {
+            "id": uuid.uuid4(),
+            "supabase_id": request.supabase_id,
+            "email": request.email,
+            "name": request.name,
+            "created_at": datetime.utcnow(),
+        }
+        new_user = await user_repo.create(user_data)
+
+        # Create learning profile for new user
+        logger.info(f"Creating learning profile for user: {new_user.id}")
+        profile_data = {
+            "id": uuid.uuid4(),
+            "user_id": new_user.id,
+            "mastery_map": {},
+            "identified_gaps": [],
+            "strengths": [],
+            "recommended_chapters": [],
+            "total_study_time_minutes": 0,
+            "updated_at": datetime.utcnow(),
+        }
+        await learning_profile_repo.create(profile_data)
+
+        await db.commit()
+        logger.info(f"Successfully created user and profile: {new_user.id}")
+
+        return new_user
+
+    except Exception as e:
+        logger.error(f"Error in auth callback: {e}", exc_info=True)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "message": "Failed to process authentication callback",
+                "code": "AUTH_CALLBACK_ERROR",
+                "error": str(e),
             },
         )
-        return updated_user
-
-    # Create new user
-    user_data = {
-        "id": uuid.uuid4(),
-        "supabase_id": request.supabase_id,
-        "email": request.email,
-        "name": request.name,
-        "created_at": datetime.utcnow(),
-    }
-    new_user = await user_repo.create(user_data)
-
-    # Create learning profile for new user
-    profile_data = {
-        "id": uuid.uuid4(),
-        "user_id": new_user.id,
-        "mastery_map": {},
-        "identified_gaps": [],
-        "strengths": [],
-        "recommended_chapters": [],
-        "total_study_time_minutes": 0,
-        "updated_at": datetime.utcnow(),
-    }
-    await learning_profile_repo.create(profile_data)
-
-    await db.commit()
-
-    return new_user
 
 
 @router.get("/me", response_model=UserResponse)

@@ -1,61 +1,38 @@
 """Chat service for Socratic dialogue with students."""
 
+import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncGenerator
 from uuid import UUID, uuid4
 
 from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.conversation import ConversationStatus
+from app.models.conversation import Conversation, ConversationStatus
+from app.models.conversation_summary import ConversationSummary
+from app.models.message import Message
 from app.repositories.conversation import ConversationRepository
+from app.repositories.conversation_summary import ConversationSummaryRepository
+from app.repositories.learning_profile import LearningProfileRepository
 from app.repositories.message import MessageRepository
 from app.services.rag_service import RAGService
+from app.prompts.socratic_tutor import (
+    build_socratic_prompt,
+    build_initial_greeting_prompt,
+    build_summary_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ChatMessage:
-    """Represents a chat message."""
-
-    def __init__(self, role: str, content: str):
-        """
-        Initialize chat message.
-
-        Args:
-            role: Message role (user, assistant, system)
-            content: Message content
-        """
-        self.role = role
-        self.content = content
-
-    def to_dict(self) -> dict[str, str]:
-        """Convert to dictionary."""
-        return {"role": self.role, "content": self.content}
-
-
 class ChatService:
-    """Service for managing Socratic tutoring conversations."""
+    """Service for managing Socratic tutoring conversations with streaming support."""
 
-    SOCRATIC_SYSTEM_PROMPT = """You are an expert AI tutor using the Socratic method to help students learn. Your teaching philosophy:
-
-1. **Never give direct answers immediately** - Guide students to discover answers themselves
-2. **Ask probing questions** - Assess their current understanding before explaining
-3. **Build on existing knowledge** - Connect new concepts to what they already know
-4. **Provide hints, not solutions** - Give progressively clearer hints if they struggle
-5. **Use analogies and examples** - Make abstract concepts concrete
-6. **Check understanding** - Don't move forward until they grasp the current concept
-7. **Be encouraging** - Celebrate insights and effort, not just correct answers
-8. **Stay on topic** - Keep the conversation focused on the chapter's concepts
-
-You have access to relevant excerpts from the course textbook. Use these to:
-- Verify the accuracy of your explanations
-- Reference specific examples or definitions from the book
-- Guide students to key passages
-
-Remember: Your goal is to help them **think**, not just to give them answers."""
+    # Context length management
+    MAX_MESSAGES_IN_CONTEXT = 20  # Keep last 20 messages for context
+    MAX_TOKENS_PER_MESSAGE = 4000  # For RAG context
 
     def __init__(self, session: AsyncSession):
         """
@@ -68,11 +45,13 @@ Remember: Your goal is to help them **think**, not just to give them answers."""
         self.rag_service = RAGService(session)
         self.conversation_repo = ConversationRepository(session)
         self.message_repo = MessageRepository(session)
+        self.summary_repo = ConversationSummaryRepository(session)
+        self.profile_repo = LearningProfileRepository(session)
         self.anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-    async def start_conversation(
+    async def create_conversation(
         self, user_id: UUID, chapter_id: UUID
-    ) -> dict[str, Any]:
+    ) -> Conversation:
         """
         Start a new conversation for a chapter.
 
@@ -81,42 +60,32 @@ Remember: Your goal is to help them **think**, not just to give them answers."""
             chapter_id: Chapter UUID
 
         Returns:
-            Conversation data with initial greeting
-        """
-        logger.info(f"Starting conversation for user {user_id}, chapter {chapter_id}")
+            Created Conversation model
 
-        # Get chapter context
+        Raises:
+            ValueError: If chapter not found
+        """
+        logger.info(f"Creating conversation: user={user_id}, chapter={chapter_id}")
+
+        # Verify chapter exists by getting its context
         chapter_context = await self.rag_service.get_chapter_context(chapter_id)
 
         # Create conversation record
         conversation_id = uuid4()
-        conversation = await self.conversation_repo.create(
-            {
-                "id": conversation_id,
-                "user_id": user_id,
-                "chapter_id": chapter_id,
-                "started_at": datetime.utcnow(),
-                "status": ConversationStatus.ACTIVE,
-            }
-        )
+        conversation_data = {
+            "id": conversation_id,
+            "user_id": user_id,
+            "chapter_id": chapter_id,
+            "started_at": datetime.utcnow(),
+            "status": ConversationStatus.ACTIVE,
+        }
+
+        conversation = await self.conversation_repo.create(conversation_data)
         await self.session.commit()
 
-        # Create system message with chapter context
-        system_content = self._create_chapter_system_message(chapter_context)
-        await self.message_repo.create(
-            {
-                "id": uuid4(),
-                "conversation_id": conversation_id,
-                "role": "system",
-                "content": system_content,
-                "created_at": datetime.utcnow(),
-            }
-        )
-
-        # Generate initial greeting
+        # Generate and save initial greeting
         greeting = await self._generate_initial_greeting(chapter_context)
 
-        # Save assistant greeting
         await self.message_repo.create(
             {
                 "id": uuid4(),
@@ -128,41 +97,45 @@ Remember: Your goal is to help them **think**, not just to give them answers."""
         )
         await self.session.commit()
 
-        logger.info(f"Conversation {conversation_id} started successfully")
-
-        return {
-            "conversation_id": str(conversation_id),
-            "chapter": chapter_context,
-            "message": greeting,
-        }
+        logger.info(f"Conversation created: {conversation_id}")
+        return conversation
 
     async def send_message(
         self, conversation_id: UUID, user_message: str
-    ) -> dict[str, Any]:
+    ) -> AsyncGenerator[str, None]:
         """
-        Send a user message and get AI response.
+        Process user message and stream AI response.
+
+        Uses RAG to get relevant content and Socratic prompting strategy.
 
         Args:
             conversation_id: Conversation UUID
             user_message: User's message content
 
-        Returns:
-            Assistant's response with metadata
+        Yields:
+            Chunks of the AI response as they're generated
+
+        Raises:
+            ValueError: If conversation not found or not active
         """
         logger.info(f"Processing message for conversation {conversation_id}")
 
-        # Verify conversation exists and is active
+        # 1. Verify conversation exists and is active
         conversation = await self.conversation_repo.get(conversation_id)
         if not conversation:
             raise ValueError(f"Conversation {conversation_id} not found")
 
         if conversation.status != ConversationStatus.ACTIVE:
-            raise ValueError(f"Conversation is {conversation.status}, not active")
+            raise ValueError(
+                f"Conversation is {conversation.status}, not active. "
+                "Please start a new conversation."
+            )
 
-        # Save user message
+        # 2. Save user message to database
+        user_message_id = uuid4()
         await self.message_repo.create(
             {
-                "id": uuid4(),
+                "id": user_message_id,
                 "conversation_id": conversation_id,
                 "role": "user",
                 "content": user_message,
@@ -171,79 +144,88 @@ Remember: Your goal is to help them **think**, not just to give them answers."""
         )
         await self.session.commit()
 
-        # Retrieve relevant context using RAG
-        retrieved_chunks = await self.rag_service.retrieve_context(
+        # 3. Retrieve relevant chunks via RAG
+        logger.debug("Retrieving relevant content via RAG")
+        rag_context = await self.rag_service.retrieve_with_context(
             query=user_message,
             chapter_id=conversation.chapter_id,
-            limit=5,
-            min_similarity=0.5,
+            conversation_history=await self._get_recent_messages(conversation_id),
+            top_k=5,
         )
 
-        # Format context
-        rag_context = await self.rag_service.format_context_for_llm(
-            retrieved_chunks, max_tokens=4000
+        # 4. Get user's learning profile
+        learning_profile = await self._get_learning_profile(conversation.user_id)
+
+        # 5. Build complete prompt with all context
+        formatted_context = await self.rag_service.format_context_for_llm(
+            rag_context.chunks, max_tokens=self.MAX_TOKENS_PER_MESSAGE
         )
 
-        # Get conversation history
-        messages = await self.message_repo.get_by_conversation(conversation_id)
-
-        # Build Claude messages (exclude system messages, handle them separately)
-        claude_messages = []
-        system_message = None
-
-        for msg in messages:
-            if msg.role == "system":
-                system_message = msg.content
-            else:
-                claude_messages.append(
-                    {"role": msg.role, "content": msg.content}
-                )
-
-        # Add RAG context to the user's latest message
-        enhanced_user_message = f"{user_message}\n\n{rag_context}"
-        claude_messages[-1]["content"] = enhanced_user_message
-
-        # Generate response from Claude
-        response = await self.anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            system=f"{self.SOCRATIC_SYSTEM_PROMPT}\n\n{system_message}",
-            messages=claude_messages,
+        system_prompt = build_socratic_prompt(
+            chapter_context=rag_context.chapter_info,
+            retrieved_content=formatted_context,
+            learning_profile=learning_profile,
+            conversation_summary=None,  # TODO: Add mid-conversation summaries
         )
 
-        assistant_message = response.content[0].text
+        # 6. Get conversation history for Claude
+        messages = await self._build_claude_messages(conversation_id)
 
-        # Save assistant response
+        # 7. Stream response from Claude API
+        logger.debug("Streaming response from Claude API")
+        full_response = ""
+
+        try:
+            async with self.anthropic_client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for text in stream.text_stream:
+                    full_response += text
+                    yield text
+
+        except Exception as e:
+            logger.error(f"Error streaming from Claude: {e}", exc_info=True)
+            error_message = "I apologize, but I encountered an error. Please try again."
+            yield error_message
+            full_response = error_message
+
+        # 8. Save assistant message to database
         await self.message_repo.create(
             {
                 "id": uuid4(),
                 "conversation_id": conversation_id,
                 "role": "assistant",
-                "content": assistant_message,
+                "content": full_response,
                 "created_at": datetime.utcnow(),
             }
         )
         await self.session.commit()
 
-        logger.info(f"Response generated for conversation {conversation_id}")
+        logger.info(f"Message processed successfully for conversation {conversation_id}")
 
-        return {
-            "message": assistant_message,
-            "sources": [chunk.to_dict() for chunk in retrieved_chunks],
-        }
-
-    async def end_conversation(self, conversation_id: UUID) -> dict[str, Any]:
+    async def end_conversation(
+        self, conversation_id: UUID
+    ) -> ConversationSummary:
         """
-        End a conversation and mark it as completed.
+        End conversation and generate summary.
+
+        Triggers learning profile update.
 
         Args:
             conversation_id: Conversation UUID
 
         Returns:
-            Conversation summary data
+            Generated ConversationSummary
+
+        Raises:
+            ValueError: If conversation not found
         """
         logger.info(f"Ending conversation {conversation_id}")
 
+        # Verify conversation exists
         conversation = await self.conversation_repo.get(conversation_id)
         if not conversation:
             raise ValueError(f"Conversation {conversation_id} not found")
@@ -258,89 +240,194 @@ Remember: Your goal is to help them **think**, not just to give them answers."""
         )
         await self.session.commit()
 
+        # Generate conversation summary
+        summary = await self._generate_conversation_summary(conversation_id)
+
+        # TODO: Trigger learning profile update based on summary
+        # This would call a ProfileService method to update mastery scores,
+        # identify gaps, and recalculate recommendations
+
         logger.info(f"Conversation {conversation_id} ended successfully")
+        return summary
 
-        return {
-            "conversation_id": str(conversation_id),
-            "status": "completed",
-            "message": "Conversation ended. Great work!",
-        }
-
-    async def get_conversation_history(
+    async def get_conversation_with_messages(
         self, conversation_id: UUID
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """
-        Get full conversation history.
+        Get conversation with all messages.
 
         Args:
             conversation_id: Conversation UUID
 
         Returns:
-            List of messages
+            Dictionary with conversation and messages
+
+        Raises:
+            ValueError: If conversation not found
         """
+        conversation = await self.conversation_repo.get(conversation_id)
+        if not conversation:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
         messages = await self.message_repo.get_by_conversation(conversation_id)
 
-        # Filter out system messages from user-facing history
+        return {
+            "conversation": {
+                "id": str(conversation.id),
+                "user_id": str(conversation.user_id),
+                "chapter_id": str(conversation.chapter_id),
+                "started_at": conversation.started_at.isoformat(),
+                "ended_at": conversation.ended_at.isoformat() if conversation.ended_at else None,
+                "status": conversation.status.value,
+            },
+            "messages": [
+                {
+                    "id": str(msg.id),
+                    "role": msg.role,
+                    "content": msg.content,
+                    "created_at": msg.created_at.isoformat(),
+                }
+                for msg in messages
+            ],
+        }
+
+    async def list_user_conversations(
+        self, user_id: UUID, limit: int = 20, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """
+        List conversations for a user.
+
+        Args:
+            user_id: User UUID
+            limit: Maximum number to return
+            offset: Offset for pagination
+
+        Returns:
+            List of conversation summaries
+        """
+        conversations = await self.conversation_repo.get_by_user(
+            user_id, limit=limit, offset=offset
+        )
+
         return [
             {
-                "id": str(msg.id),
-                "role": msg.role,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat(),
+                "id": str(conv.id),
+                "chapter_id": str(conv.chapter_id),
+                "started_at": conv.started_at.isoformat(),
+                "ended_at": conv.ended_at.isoformat() if conv.ended_at else None,
+                "status": conv.status.value,
             }
-            for msg in messages
-            if msg.role != "system"
+            for conv in conversations
         ]
 
-    def _create_chapter_system_message(self, chapter_context: dict[str, Any]) -> str:
-        """
-        Create system message with chapter context.
+    # Private helper methods
 
-        Args:
-            chapter_context: Chapter metadata
-
-        Returns:
-            Formatted system message
-        """
-        key_concepts = ", ".join(chapter_context.get("key_concepts", []))
-
-        return f"""## Chapter Context
-
-**Book**: {chapter_context['book_title']} by {chapter_context['book_author']}
-**Chapter {chapter_context['chapter_number']}**: {chapter_context['chapter_title']}
-
-**Summary**: {chapter_context['summary']}
-
-**Key Concepts**: {key_concepts if key_concepts else 'Not specified'}
-
-Your role is to help the student understand this chapter using the Socratic method."""
-
-    async def _generate_initial_greeting(
-        self, chapter_context: dict[str, Any]
-    ) -> str:
-        """
-        Generate personalized initial greeting for the chapter.
-
-        Args:
-            chapter_context: Chapter metadata
-
-        Returns:
-            Greeting message
-        """
-        system_prompt = f"""{self.SOCRATIC_SYSTEM_PROMPT}
-
-{self._create_chapter_system_message(chapter_context)}"""
+    async def _generate_initial_greeting(self, chapter_context: dict[str, Any]) -> str:
+        """Generate personalized initial greeting."""
+        prompt = build_initial_greeting_prompt(chapter_context)
 
         response = await self.anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=500,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Generate a brief, friendly greeting to start our study session. Ask an opening question to assess my current familiarity with this chapter's topic. Keep it warm and encouraging.",
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
         )
 
         return response.content[0].text
+
+    async def _generate_conversation_summary(
+        self, conversation_id: UUID
+    ) -> ConversationSummary:
+        """Generate summary using Claude."""
+        messages = await self.message_repo.get_by_conversation(conversation_id)
+
+        # Format messages for summary
+        message_dicts = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+            if msg.role in ("user", "assistant")
+        ]
+
+        summary_prompt = build_summary_prompt(message_dicts)
+
+        # Get summary from Claude
+        response = await self.anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": summary_prompt}],
+        )
+
+        summary_text = response.content[0].text
+
+        # Parse JSON response
+        try:
+            summary_data = json.loads(summary_text)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse summary JSON: {summary_text}")
+            # Fallback to basic summary
+            summary_data = {
+                "summary": "Conversation completed",
+                "topics_covered": [],
+                "concepts_understood": [],
+                "concepts_struggled": [],
+                "questions_asked": 0,
+                "engagement_score": 0.5,
+            }
+
+        # Save summary to database
+        summary = await self.summary_repo.create(
+            {
+                "id": uuid4(),
+                "conversation_id": conversation_id,
+                "summary": summary_data.get("summary", ""),
+                "topics_covered": summary_data.get("topics_covered", []),
+                "concepts_understood": summary_data.get("concepts_understood", []),
+                "concepts_struggled": summary_data.get("concepts_struggled", []),
+                "questions_asked": summary_data.get("questions_asked", 0),
+                "engagement_score": summary_data.get("engagement_score", 0.5),
+                "created_at": datetime.utcnow(),
+            }
+        )
+        await self.session.commit()
+
+        return summary
+
+    async def _get_recent_messages(
+        self, conversation_id: UUID
+    ) -> list[Message]:
+        """Get recent messages for context, respecting limits."""
+        all_messages = await self.message_repo.get_by_conversation(conversation_id)
+
+        # Return last N messages
+        return all_messages[-self.MAX_MESSAGES_IN_CONTEXT:]
+
+    async def _build_claude_messages(
+        self, conversation_id: UUID
+    ) -> list[dict[str, str]]:
+        """Build message history for Claude API."""
+        messages = await self._get_recent_messages(conversation_id)
+
+        # Filter out system messages and format for Claude
+        claude_messages = []
+        for msg in messages:
+            if msg.role in ("user", "assistant"):
+                claude_messages.append(
+                    {"role": msg.role, "content": msg.content}
+                )
+
+        return claude_messages
+
+    async def _get_learning_profile(self, user_id: UUID) -> dict[str, Any] | None:
+        """Get user's learning profile."""
+        try:
+            profile = await self.profile_repo.get_by_user(user_id)
+            if not profile:
+                return None
+
+            return {
+                "strengths": profile.strengths or [],
+                "identified_gaps": profile.identified_gaps or [],
+                "mastery_map": profile.mastery_map or {},
+            }
+        except Exception as e:
+            logger.warning(f"Could not load learning profile: {e}")
+            return None

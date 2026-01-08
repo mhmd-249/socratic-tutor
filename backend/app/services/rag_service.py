@@ -105,6 +105,46 @@ class RAGService:
         if abs((semantic_weight + keyword_weight) - 1.0) > 0.01:
             raise ValueError("Semantic and keyword weights must sum to 1.0")
 
+    async def get_chapter_context(self, chapter_id: UUID) -> dict[str, Any]:
+        """
+        Get chapter context information without retrieving chunks.
+
+        Used when starting a new conversation to get chapter details
+        for the initial greeting.
+
+        Args:
+            chapter_id: Chapter UUID
+
+        Returns:
+            Dictionary with chapter and book information
+
+        Raises:
+            ValueError: If chapter or book not found
+        """
+        logger.info(f"Getting chapter context for chapter {chapter_id}")
+
+        # Get chapter information
+        chapter = await self.chapter_repo.get(chapter_id)
+        if not chapter:
+            raise ValueError(f"Chapter {chapter_id} not found")
+
+        book = await self.book_repo.get(chapter.book_id)
+        if not book:
+            raise ValueError(f"Book {chapter.book_id} not found")
+
+        chapter_info = {
+            "chapter_id": str(chapter.id),
+            "chapter_title": chapter.title,
+            "chapter_number": chapter.chapter_number,
+            "summary": chapter.summary,
+            "key_concepts": chapter.key_concepts,
+            "book_title": book.title,
+            "book_author": book.author,
+        }
+
+        logger.info(f"Retrieved chapter context: {chapter.title}")
+        return chapter_info
+
     async def retrieve(
         self,
         query: str,

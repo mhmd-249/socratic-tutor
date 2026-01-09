@@ -1,10 +1,21 @@
 """Main FastAPI application entry point."""
 
-from fastapi import FastAPI
+import logging
+import traceback
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+
+# Configure logging to show debug output
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def create_application() -> FastAPI:
@@ -47,6 +58,21 @@ def create_application() -> FastAPI:
 
 
 app = create_application()
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Global exception handler that logs full tracebacks."""
+    tb = traceback.format_exc()
+    logger.error(f"Unhandled exception for {request.method} {request.url}:\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "type": type(exc).__name__,
+            "traceback": tb.split("\n"),  # Include traceback in response for debugging
+        },
+    )
 
 
 @app.get("/health")

@@ -12,11 +12,13 @@ from app.core.config import settings
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.conversation_summary import ConversationSummary
 from app.models.message import Message
+from app.repositories.chapter import ChapterRepository
 from app.repositories.conversation import ConversationRepository
 from app.repositories.learning_profile import LearningProfileRepository
 from app.repositories.message import MessageRepository
 from app.services.rag_service import RAGService
 from app.services.summary_service import SummaryService
+from app.services.profile_service import ProfileService
 from app.prompts.socratic_tutor import (
     build_socratic_prompt,
     build_initial_greeting_prompt,
@@ -44,7 +46,9 @@ class ChatService:
         self.conversation_repo = ConversationRepository(session)
         self.message_repo = MessageRepository(session)
         self.summary_service = SummaryService(session)
+        self.profile_service = ProfileService(session)
         self.profile_repo = LearningProfileRepository(session)
+        self.chapter_repo = ChapterRepository(session)
         self.anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     async def create_conversation(
@@ -247,9 +251,21 @@ class ChatService:
             messages=messages,
         )
 
-        # TODO: Trigger learning profile update based on summary
-        # This would call a ProfileService method to update mastery scores,
-        # identify gaps, and recalculate recommendations
+        # Trigger learning profile update based on summary
+        try:
+            chapter = await self.chapter_repo.get(conversation.chapter_id)
+            if chapter:
+                await self.profile_service.update_from_summary(
+                    user_id=conversation.user_id,
+                    summary=summary,
+                    chapter=chapter,
+                )
+                logger.info(f"Learning profile updated for user {conversation.user_id}")
+            else:
+                logger.warning(f"Chapter {conversation.chapter_id} not found, skipping profile update")
+        except Exception as e:
+            # Don't fail the entire end_conversation if profile update fails
+            logger.error(f"Failed to update learning profile: {e}", exc_info=True)
 
         logger.info(f"Conversation {conversation_id} ended successfully")
         return summary

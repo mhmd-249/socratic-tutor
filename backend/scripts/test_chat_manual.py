@@ -2,7 +2,7 @@ import asyncio
 import httpx
 
 API_URL = "http://localhost:8000/api/v1"
-TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6IjlkZmYwYjAzLTZlYmItNGQxYi05NDI0LTMxMTY2NGEzODYzOCIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3FtanB6Z2hhaHBjZG91YWxyZWx2LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI2ZjRlYzM2MS1lMTI5LTQ4ZDgtODk2OC1kNzYwMDI5YmI1NjUiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzY3OTg2MTk0LCJpYXQiOjE3Njc5ODI1OTQsImVtYWlsIjoibW9oYW1tZWRAZXF1aXRlY2hmdXR1cmVzLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJtb2hhbW1lZEBlcXVpdGVjaGZ1dHVyZXMuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsIm5hbWUiOiJNb2hhbW1lZCBNb2hhbW1lZCIsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiNmY0ZWMzNjEtZTEyOS00OGQ4LTg5NjgtZDc2MDAyOWJiNTY1In0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoicGFzc3dvcmQiLCJ0aW1lc3RhbXAiOjE3Njc5ODI1OTR9XSwic2Vzc2lvbl9pZCI6IjBmODVjYjYyLWRiOWUtNDM2OS1hZjJhLWRkY2M0Mjg4YTE1OCIsImlzX2Fub255bW91cyI6ZmFsc2V9.ojNl1qoMhT458_fH9w8-qaDjk0Efp9wpPcA41PxtyfNwyaqfr1CQ7kgc8Vh3S6pYV117CKOfzD6w9QUX_Iou-g"  # Replace with actual token
+TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6IjlkZmYwYjAzLTZlYmItNGQxYi05NDI0LTMxMTY2NGEzODYzOCIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3FtanB6Z2hhaHBjZG91YWxyZWx2LnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI2ZjRlYzM2MS1lMTI5LTQ4ZDgtODk2OC1kNzYwMDI5YmI1NjUiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzY4MDY1MTA2LCJpYXQiOjE3NjgwNjE1MDYsImVtYWlsIjoibW9oYW1tZWRAZXF1aXRlY2hmdXR1cmVzLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJtb2hhbW1lZEBlcXVpdGVjaGZ1dHVyZXMuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsIm5hbWUiOiJNb2hhbW1lZCBNb2hhbW1lZCIsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiNmY0ZWMzNjEtZTEyOS00OGQ4LTg5NjgtZDc2MDAyOWJiNTY1In0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoicGFzc3dvcmQiLCJ0aW1lc3RhbXAiOjE3NjgwNjE1MDZ9XSwic2Vzc2lvbl9pZCI6ImVhYTNjZTFmLWJjMzYtNDFhNC04ODBjLWJlYTczNzUyODY3MSIsImlzX2Fub255bW91cyI6ZmFsc2V9.FojmtY5TmQb1YaZ24fjuOA79rFdbHmIbBlx59G7DPKmfEvk6J7CQvNpBG3RO1DUwJlMUXqDpvGqWoSJcIo6Rzg"  # Replace with actual token
 CHAPTER_ID = "f25afb85-a98c-4db8-bd44-d0bef41f5688"  # Replace with actual chapter ID
 
 headers = {"Authorization": f"Bearer {TOKEN}"}
@@ -19,14 +19,14 @@ async def test_chat():
         )
         print(f"Status: {resp.status_code}")
         
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 201):
             print(f"Error: {resp.text}")
             return
             
         conversation = resp.json()
         conv_id = conversation["id"]
         print(f"Conversation ID: {conv_id}")
-        print(f"Initial greeting: {conversation['messages'][0]['content'][:200]}...")
+        print(f"Initial greeting: {conversation['initial_message'][:200]}...")
         
         # 2. Send a message and stream response
         print("\n" + "=" * 50)

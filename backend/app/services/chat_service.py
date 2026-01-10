@@ -1,6 +1,5 @@
 """Chat service for Socratic dialogue with students."""
 
-import json
 import logging
 from datetime import datetime
 from typing import Any, AsyncGenerator
@@ -14,14 +13,13 @@ from app.models.conversation import Conversation, ConversationStatus
 from app.models.conversation_summary import ConversationSummary
 from app.models.message import Message
 from app.repositories.conversation import ConversationRepository
-from app.repositories.conversation_summary import ConversationSummaryRepository
 from app.repositories.learning_profile import LearningProfileRepository
 from app.repositories.message import MessageRepository
 from app.services.rag_service import RAGService
+from app.services.summary_service import SummaryService
 from app.prompts.socratic_tutor import (
     build_socratic_prompt,
     build_initial_greeting_prompt,
-    build_summary_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +43,7 @@ class ChatService:
         self.rag_service = RAGService(session)
         self.conversation_repo = ConversationRepository(session)
         self.message_repo = MessageRepository(session)
-        self.summary_repo = ConversationSummaryRepository(session)
+        self.summary_service = SummaryService(session)
         self.profile_repo = LearningProfileRepository(session)
         self.anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
@@ -240,8 +238,14 @@ class ChatService:
         )
         await self.session.commit()
 
-        # Generate conversation summary
-        summary = await self._generate_conversation_summary(conversation_id)
+        # Get messages for summary
+        messages = await self.message_repo.get_by_conversation(conversation_id)
+
+        # Generate conversation summary using SummaryService
+        summary = await self.summary_service.generate_summary(
+            conversation=conversation,
+            messages=messages,
+        )
 
         # TODO: Trigger learning profile update based on summary
         # This would call a ProfileService method to update mastery scores,
@@ -333,63 +337,6 @@ class ChatService:
         )
 
         return response.content[0].text
-
-    async def _generate_conversation_summary(
-        self, conversation_id: UUID
-    ) -> ConversationSummary:
-        """Generate summary using Claude."""
-        messages = await self.message_repo.get_by_conversation(conversation_id)
-
-        # Format messages for summary
-        message_dicts = [
-            {"role": msg.role, "content": msg.content}
-            for msg in messages
-            if msg.role in ("user", "assistant")
-        ]
-
-        summary_prompt = build_summary_prompt(message_dicts)
-
-        # Get summary from Claude
-        response = await self.anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": summary_prompt}],
-        )
-
-        summary_text = response.content[0].text
-
-        # Parse JSON response
-        try:
-            summary_data = json.loads(summary_text)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse summary JSON: {summary_text}")
-            # Fallback to basic summary
-            summary_data = {
-                "summary": "Conversation completed",
-                "topics_covered": [],
-                "concepts_understood": [],
-                "concepts_struggled": [],
-                "questions_asked": 0,
-                "engagement_score": 0.5,
-            }
-
-        # Save summary to database
-        summary = await self.summary_repo.create(
-            {
-                "id": uuid4(),
-                "conversation_id": conversation_id,
-                "summary": summary_data.get("summary", ""),
-                "topics_covered": summary_data.get("topics_covered", []),
-                "concepts_understood": summary_data.get("concepts_understood", []),
-                "concepts_struggled": summary_data.get("concepts_struggled", []),
-                "questions_asked": summary_data.get("questions_asked", 0),
-                "engagement_score": summary_data.get("engagement_score", 0.5),
-                "created_at": datetime.utcnow(),
-            }
-        )
-        await self.session.commit()
-
-        return summary
 
     async def _get_recent_messages(
         self, conversation_id: UUID

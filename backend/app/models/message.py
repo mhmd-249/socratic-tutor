@@ -33,7 +33,11 @@ class Message(Base):
         index=True,
     )
     role: Mapped[MessageRole] = mapped_column(
-        SQLEnum(MessageRole, name="message_role")
+        SQLEnum(
+            MessageRole,
+            name="message_role",
+            values_callable=lambda obj: [e.value for e in obj],  # Use enum values, not names
+        )
     )
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

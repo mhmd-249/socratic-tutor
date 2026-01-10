@@ -51,10 +51,25 @@ async def get_supabase_jwks() -> dict[str, Any]:
         return _jwks_cache
 
     supabase_url = settings.SUPABASE_URL
-    jwks_url = f"{supabase_url}/auth/v1/jwks"
+
+    # Debug: Log the SUPABASE_URL value
+    logger.info(f"SUPABASE_URL value: '{supabase_url}' (length: {len(supabase_url) if supabase_url else 0})")
+
+    if not supabase_url:
+        raise SupabaseJWTError(
+            "SUPABASE_URL is not set. Check your .env file and ensure "
+            "docker-compose.yml has env_file: ./backend/.env"
+        )
+
+    if not supabase_url.startswith(("http://", "https://")):
+        raise SupabaseJWTError(
+            f"SUPABASE_URL must start with http:// or https://, got: '{supabase_url}'"
+        )
+
+    jwks_url = f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 
     try:
-        logger.debug(f"Fetching JWKS from {jwks_url}")
+        logger.info(f"Fetching JWKS from {jwks_url}")
         async with httpx.AsyncClient() as client:
             response = await client.get(jwks_url)
             response.raise_for_status()

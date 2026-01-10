@@ -23,13 +23,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: socratic-tutor-backend
+    env_file:
+      - ./backend/.env
     environment:
+      # Override DATABASE_URL to use Docker network hostname
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/socratic_tutor
-      SUPABASE_URL: ${SUPABASE_URL:-}
-      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      CORS_ORIGINS: '["http://localhost:3000"]'
+      # Override CORS for Docker environment
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:3001","http://127.0.0.1:3000","http://127.0.0.1:3001"]'
     ports:
       - "8000:8000"
     volumes:

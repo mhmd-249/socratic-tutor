@@ -38,7 +38,11 @@ class Conversation(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[ConversationStatus] = mapped_column(
-        SQLEnum(ConversationStatus, name="conversation_status"),
+        SQLEnum(
+            ConversationStatus,
+            name="conversation_status",
+            values_callable=lambda obj: [e.value for e in obj],  # Use enum values, not names
+        ),
         default=ConversationStatus.ACTIVE,
         index=True,
     )

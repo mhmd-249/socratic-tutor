@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey, ARRAY
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
 
@@ -32,6 +33,9 @@ class ConversationSummary(Base):
     concepts_struggled: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     questions_asked: Mapped[int] = mapped_column(Integer, default=0)
     engagement_score: Mapped[float] = mapped_column(Float, default=0.0)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(1536), nullable=True
+    )  # For semantic search across conversations
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow
     )

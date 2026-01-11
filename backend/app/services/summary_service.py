@@ -22,6 +22,7 @@ from app.prompts.summary_prompt import (
 from app.repositories.conversation_summary import ConversationSummaryRepository
 from app.repositories.chapter import ChapterRepository
 from app.repositories.book import BookRepository
+from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,7 @@ class SummaryService:
         self.summary_repo = ConversationSummaryRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.book_repo = BookRepository(session)
+        self.embedding_service = EmbeddingService()
         self.anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     async def generate_summary(
@@ -370,6 +372,8 @@ class SummaryService:
         """
         Create and save the ConversationSummary record.
 
+        Generates embedding for semantic search across conversations.
+
         Args:
             conversation_id: ID of the conversation
             analysis: Validated analysis from Claude
@@ -377,6 +381,9 @@ class SummaryService:
         Returns:
             Saved ConversationSummary model
         """
+        # Generate embedding for the summary for semantic search
+        embedding = await self._generate_summary_embedding(analysis)
+
         summary_data = {
             "id": uuid4(),
             "conversation_id": conversation_id,
@@ -386,6 +393,7 @@ class SummaryService:
             "concepts_struggled": analysis.get_concepts_struggled_strings(),
             "questions_asked": analysis.questions_asked_by_student,
             "engagement_score": analysis.engagement_score,
+            "embedding": embedding,
             "created_at": datetime.utcnow(),
         }
 
@@ -393,6 +401,51 @@ class SummaryService:
         await self.session.commit()
 
         return summary
+
+    async def _generate_summary_embedding(
+        self,
+        analysis: SummaryAnalysis,
+    ) -> list[float] | None:
+        """
+        Generate embedding for the summary content.
+
+        Creates a rich text representation combining summary, topics,
+        and concepts for better semantic search.
+
+        Args:
+            analysis: Validated analysis from Claude
+
+        Returns:
+            Embedding vector or None if generation fails
+        """
+        try:
+            # Build a comprehensive text for embedding
+            parts = [analysis.summary]
+
+            if analysis.topics_covered:
+                parts.append("Topics: " + ", ".join(analysis.topics_covered))
+
+            concepts_understood = analysis.get_concepts_understood_strings()
+            if concepts_understood:
+                parts.append("Understood: " + ", ".join(concepts_understood))
+
+            concepts_struggled = analysis.get_concepts_struggled_strings()
+            if concepts_struggled:
+                parts.append("Struggled: " + ", ".join(concepts_struggled))
+
+            text_to_embed = " | ".join(parts)
+
+            logger.debug(f"Generating embedding for summary: {text_to_embed[:100]}...")
+
+            embedding = await self.embedding_service.generate_embedding(text_to_embed)
+
+            logger.info("Successfully generated summary embedding")
+            return embedding
+
+        except Exception as e:
+            logger.warning(f"Failed to generate summary embedding: {e}")
+            # Return None - embedding is optional, summary still works
+            return None
 
     async def get_summary(self, conversation_id: UUID) -> ConversationSummary | None:
         """

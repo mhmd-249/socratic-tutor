@@ -92,11 +92,26 @@ Your goal is to help students **think** and **understand**, not just to give the
 """
 
 
+MEMORY_PROMPT_SECTION = """
+## Relevant Past Discussions
+
+{formatted_memories}
+
+**How to use these memories:**
+- Reference concepts from previous discussions when relevant ("Remember when we discussed...")
+- Acknowledge progress the student has made since past conversations
+- Connect current topic to previous learning for continuity
+- Be aware of persistent struggles and address them proactively
+- Don't force references - only mention past discussions when naturally relevant
+"""
+
+
 def build_socratic_prompt(
     chapter_context: dict[str, Any],
     retrieved_content: str,
     learning_profile: dict[str, Any] | None = None,
     conversation_summary: str | None = None,
+    formatted_memories: str | None = None,
 ) -> str:
     """
     Build the complete system prompt for Socratic tutoring.
@@ -106,6 +121,7 @@ def build_socratic_prompt(
         retrieved_content: RAG-retrieved content from textbook
         learning_profile: User's learning profile (optional)
         conversation_summary: Summary of conversation so far (optional)
+        formatted_memories: Formatted past conversation memories (optional)
 
     Returns:
         Complete formatted system prompt
@@ -169,6 +185,13 @@ Use this content to ground your responses and guide students to these specific p
 Continue building on this discussion. Reference earlier points when relevant.
 """
 
+    # Build memory section (if available)
+    memory_section = ""
+    if formatted_memories and formatted_memories.strip():
+        memory_section = MEMORY_PROMPT_SECTION.format(
+            formatted_memories=formatted_memories
+        )
+
     # Combine all sections
     full_prompt = SOCRATIC_SYSTEM_PROMPT + chapter_section
 
@@ -177,6 +200,9 @@ Continue building on this discussion. Reference earlier points when relevant.
 
     if profile_section:
         full_prompt += profile_section
+
+    if memory_section:
+        full_prompt += memory_section
 
     if summary_section:
         full_prompt += summary_section

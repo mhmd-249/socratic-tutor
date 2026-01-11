@@ -19,6 +19,7 @@ from app.repositories.message import MessageRepository
 from app.services.rag_service import RAGService
 from app.services.summary_service import SummaryService
 from app.services.profile_service import ProfileService
+from app.services.memory_service import MemoryService
 from app.prompts.socratic_tutor import (
     build_socratic_prompt,
     build_initial_greeting_prompt,
@@ -47,6 +48,7 @@ class ChatService:
         self.message_repo = MessageRepository(session)
         self.summary_service = SummaryService(session)
         self.profile_service = ProfileService(session)
+        self.memory_service = MemoryService(session)
         self.profile_repo = LearningProfileRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.anthropic_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -176,7 +178,14 @@ class ChatService:
         else:
             logger.info("No learning profile found for user")
 
-        # 5. Build complete prompt with all context
+        # 5. Get relevant memories from past conversations
+        formatted_memories = await self._get_relevant_memories(
+            user_id=conversation.user_id,
+            chapter_id=conversation.chapter_id,
+            query=user_message,
+        )
+
+        # 6. Build complete prompt with all context
         formatted_context = await self.rag_service.format_context_for_llm(
             rag_context.chunks, max_tokens=self.MAX_TOKENS_PER_MESSAGE
         )
@@ -186,12 +195,13 @@ class ChatService:
             retrieved_content=formatted_context,
             learning_profile=learning_profile,
             conversation_summary=None,  # TODO: Add mid-conversation summaries
+            formatted_memories=formatted_memories,
         )
 
-        # 6. Get conversation history for Claude
+        # 7. Get conversation history for Claude
         messages = await self._build_claude_messages(conversation_id)
 
-        # 7. Stream response from Claude API
+        # 8. Stream response from Claude API
         logger.debug("Streaming response from Claude API")
         full_response = ""
 
@@ -212,7 +222,7 @@ class ChatService:
             yield error_message
             full_response = error_message
 
-        # 8. Save assistant message to database
+        # 9. Save assistant message to database
         await self.message_repo.create(
             {
                 "id": uuid4(),
@@ -426,4 +436,48 @@ class ChatService:
             }
         except Exception as e:
             logger.warning(f"Could not load learning profile: {e}")
+            return None
+
+    async def _get_relevant_memories(
+        self,
+        user_id: UUID,
+        chapter_id: UUID,
+        query: str,
+    ) -> str | None:
+        """
+        Get relevant memories from past conversations.
+
+        Args:
+            user_id: User UUID
+            chapter_id: Current chapter being studied
+            query: User's current message
+
+        Returns:
+            Formatted memories string for prompt, or None if no relevant memories
+        """
+        try:
+            # Get relevant memories using semantic search
+            memories = await self.memory_service.get_relevant_history(
+                user_id=user_id,
+                current_chapter_id=chapter_id,
+                current_query=query,
+                max_memories=3,
+            )
+
+            if not memories:
+                logger.debug("No relevant memories found for user")
+                return None
+
+            # Format memories for prompt
+            formatted = await self.memory_service.format_memories_for_prompt(memories)
+
+            logger.info(
+                f"Including {len(memories)} relevant memories in prompt: "
+                f"{[m.chapter_title for m in memories]}"
+            )
+
+            return formatted
+
+        except Exception as e:
+            logger.warning(f"Failed to get relevant memories: {e}")
             return None

@@ -85,8 +85,11 @@ class ChatService:
         conversation = await self.conversation_repo.create(conversation_data)
         await self.session.commit()
 
-        # Generate and save initial greeting
-        greeting = await self._generate_initial_greeting(chapter_context)
+        # Get user's learning profile for personalized greeting
+        learning_profile = await self._get_learning_profile(user_id)
+
+        # Generate and save initial greeting (includes profile context)
+        greeting = await self._generate_initial_greeting(chapter_context, learning_profile)
 
         await self.message_repo.create(
             {
@@ -157,6 +160,21 @@ class ChatService:
 
         # 4. Get user's learning profile
         learning_profile = await self._get_learning_profile(conversation.user_id)
+
+        # Log profile context being sent to Claude
+        if learning_profile:
+            gaps = learning_profile.get("identified_gaps", [])
+            strengths = learning_profile.get("strengths", [])
+            gap_names = [
+                g.get("concept", "") if isinstance(g, dict) else str(g)
+                for g in gaps[:3]  # Log first 3 gaps
+            ]
+            logger.info(
+                f"Profile context for Claude: {len(gaps)} gaps {gap_names}, "
+                f"{len(strengths)} strengths"
+            )
+        else:
+            logger.info("No learning profile found for user")
 
         # 5. Build complete prompt with all context
         formatted_context = await self.rag_service.format_context_for_llm(
@@ -342,9 +360,24 @@ class ChatService:
 
     # Private helper methods
 
-    async def _generate_initial_greeting(self, chapter_context: dict[str, Any]) -> str:
-        """Generate personalized initial greeting."""
-        prompt = build_initial_greeting_prompt(chapter_context)
+    async def _generate_initial_greeting(
+        self,
+        chapter_context: dict[str, Any],
+        learning_profile: dict[str, Any] | None = None,
+    ) -> str:
+        """Generate personalized initial greeting with profile awareness."""
+        prompt = build_initial_greeting_prompt(chapter_context, learning_profile)
+
+        # Log profile context being used
+        if learning_profile:
+            gaps = learning_profile.get("identified_gaps", [])
+            strengths = learning_profile.get("strengths", [])
+            logger.info(
+                f"Initial greeting includes profile: "
+                f"{len(gaps)} gaps, {len(strengths)} strengths"
+            )
+        else:
+            logger.info("Initial greeting: No learning profile available (new user)")
 
         response = await self.anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",

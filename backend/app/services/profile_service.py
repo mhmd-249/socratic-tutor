@@ -521,6 +521,69 @@ class ProfileService:
 
         return updated_map
 
+    def _find_matching_gap(
+        self,
+        concept: str,
+        gaps_by_concept: dict[str, dict[str, Any]],
+    ) -> str | None:
+        """
+        Find a matching gap using fuzzy concept matching.
+
+        Matching criteria (in order):
+        1. Exact match (case-insensitive)
+        2. One concept contains the other
+        3. High word overlap (3+ shared words or 70%+ overlap)
+
+        Args:
+            concept: The concept to match
+            gaps_by_concept: Dictionary of existing gaps keyed by lowercase concept
+
+        Returns:
+            The matching gap key, or None if no match found
+        """
+        concept_lower = concept.lower().strip()
+        concept_words = set(concept_lower.split())
+
+        # 1. Exact match
+        if concept_lower in gaps_by_concept:
+            return concept_lower
+
+        # 2. Check if one contains the other, or high word overlap
+        best_match = None
+        best_overlap_ratio = 0.0
+
+        for existing_key, gap in gaps_by_concept.items():
+            existing_lower = existing_key.lower().strip()
+            existing_words = set(existing_lower.split())
+
+            # Check containment (one is substring of the other)
+            if concept_lower in existing_lower or existing_lower in concept_lower:
+                logger.debug(
+                    f"Fuzzy match (containment): '{concept}' matches '{gap.get('concept')}'"
+                )
+                return existing_key
+
+            # Check word overlap
+            if concept_words and existing_words:
+                shared_words = concept_words & existing_words
+                # Calculate overlap as ratio of shared words to smaller set
+                smaller_set_size = min(len(concept_words), len(existing_words))
+                overlap_ratio = len(shared_words) / smaller_set_size if smaller_set_size > 0 else 0
+
+                # Match if 3+ shared words OR 70%+ overlap
+                if len(shared_words) >= 3 or overlap_ratio >= 0.7:
+                    if overlap_ratio > best_overlap_ratio:
+                        best_overlap_ratio = overlap_ratio
+                        best_match = existing_key
+
+        if best_match:
+            logger.debug(
+                f"Fuzzy match (word overlap {best_overlap_ratio:.0%}): "
+                f"'{concept}' matches '{gaps_by_concept[best_match].get('concept')}'"
+            )
+
+        return best_match
+
     def _update_gaps(
         self,
         current_gaps: list[dict[str, Any]],
@@ -530,47 +593,61 @@ class ProfileService:
         """
         Update identified gaps based on new assessments.
 
+        Uses fuzzy matching to identify similar concepts.
         Tracks occurrence patterns and severity.
         """
         now = datetime.utcnow().isoformat()
 
-        # Convert to dict for easier lookup
+        # Convert to dict for easier lookup (keyed by lowercase concept)
         gaps_by_concept = {
             gap.get("concept", "").lower(): gap for gap in current_gaps
         }
 
-        # Process struggled concepts
+        # Process all assessments
         for assessment in assessments:
+            concept_lower = assessment.concept.lower()
+
+            # Try to find a matching existing gap (fuzzy match)
+            matching_key = self._find_matching_gap(assessment.concept, gaps_by_concept)
+
             if assessment.understood:
                 # If they understood it now, reduce gap severity
-                concept_key = assessment.concept.lower()
-                if concept_key in gaps_by_concept:
-                    gap = gaps_by_concept[concept_key]
+                if matching_key:
+                    gap = gaps_by_concept[matching_key]
                     # Reduce occurrence count or remove
                     occurrence = gap.get("occurrence_count", 1) - 1
                     if occurrence <= 0:
-                        del gaps_by_concept[concept_key]
+                        logger.info(
+                            f"Gap resolved: '{gap.get('concept')}' - student now understands"
+                        )
+                        del gaps_by_concept[matching_key]
                     else:
                         gap["occurrence_count"] = occurrence
                         gap["severity"] = self._calculate_severity(occurrence)
+                        logger.debug(
+                            f"Gap reduced: '{gap.get('concept')}' occurrence_count={occurrence}"
+                        )
             else:
-                # Add or update gap
-                concept_key = assessment.concept.lower()
-                if concept_key in gaps_by_concept:
-                    gap = gaps_by_concept[concept_key]
-                    gap["occurrence_count"] = gap.get("occurrence_count", 1) + 1
-                    gap["severity"] = self._calculate_severity(
-                        gap["occurrence_count"]
-                    )
+                # Add or update gap for struggled concept
+                if matching_key:
+                    # Update existing gap
+                    gap = gaps_by_concept[matching_key]
+                    old_count = gap.get("occurrence_count", 1)
+                    gap["occurrence_count"] = old_count + 1
+                    gap["severity"] = self._calculate_severity(gap["occurrence_count"])
                     gap["last_seen"] = now
                     # Add chapter to related if not present
                     related = gap.get("related_chapters", [])
                     if chapter_id not in related:
                         related.append(chapter_id)
                         gap["related_chapters"] = related
+                    logger.info(
+                        f"Gap updated: '{gap.get('concept')}' "
+                        f"occurrence_count={gap['occurrence_count']} severity={gap['severity']}"
+                    )
                 else:
                     # New gap
-                    gaps_by_concept[concept_key] = {
+                    gaps_by_concept[concept_lower] = {
                         "concept": assessment.concept,
                         "severity": "low",
                         "occurrence_count": 1,
@@ -578,6 +655,7 @@ class ProfileService:
                         "first_seen": now,
                         "last_seen": now,
                     }
+                    logger.info(f"New gap identified: '{assessment.concept}'")
 
         # Convert back to list, sorted by severity
         severity_order = {"high": 0, "medium": 1, "low": 2}

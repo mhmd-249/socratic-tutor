@@ -214,6 +214,177 @@ class TestMasteryScoreUpdate:
         assert result[chapter_id]["score"] >= 0.0
 
 
+class TestFuzzyConceptMatching:
+    """Tests for fuzzy concept matching in gap identification."""
+
+    def test_exact_match(self):
+        """Test exact match works."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "gradient descent": {"concept": "gradient descent", "occurrence_count": 1}
+        }
+
+        result = service._find_matching_gap(service, "gradient descent", gaps_by_concept)
+        assert result == "gradient descent"
+
+    def test_case_insensitive_match(self):
+        """Test case insensitive matching."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "gradient descent": {"concept": "Gradient Descent", "occurrence_count": 1}
+        }
+
+        result = service._find_matching_gap(service, "GRADIENT DESCENT", gaps_by_concept)
+        assert result == "gradient descent"
+
+    def test_containment_match_existing_contains_new(self):
+        """Test matching when existing concept contains the new one."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "supervised vs unsupervised learning distinction": {
+                "concept": "supervised vs unsupervised learning distinction",
+                "occurrence_count": 1,
+            }
+        }
+
+        # Shorter version should match longer
+        result = service._find_matching_gap(
+            service, "supervised vs unsupervised learning", gaps_by_concept
+        )
+        assert result == "supervised vs unsupervised learning distinction"
+
+    def test_containment_match_new_contains_existing(self):
+        """Test matching when new concept contains the existing one."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "supervised vs unsupervised learning": {
+                "concept": "supervised vs unsupervised learning",
+                "occurrence_count": 1,
+            }
+        }
+
+        # Longer version should match shorter
+        result = service._find_matching_gap(
+            service, "supervised vs unsupervised learning distinction", gaps_by_concept
+        )
+        assert result == "supervised vs unsupervised learning"
+
+    def test_word_overlap_three_words(self):
+        """Test matching with 3+ shared words."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "understanding neural network architectures": {
+                "concept": "understanding neural network architectures",
+                "occurrence_count": 1,
+            }
+        }
+
+        # Different phrasing with 3 shared words: neural, network, architectures
+        result = service._find_matching_gap(
+            service, "neural network architectures explained", gaps_by_concept
+        )
+        assert result == "understanding neural network architectures"
+
+    def test_word_overlap_70_percent(self):
+        """Test matching with 70%+ word overlap."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "learning rate tuning": {
+                "concept": "learning rate tuning",
+                "occurrence_count": 1,
+            }
+        }
+
+        # 2 of 3 words match = 67%, but let's test 3 of 4 = 75%
+        result = service._find_matching_gap(
+            service, "learning rate tuning methods", gaps_by_concept
+        )
+        # 3 shared words out of 3 (smaller set) = 100%
+        assert result == "learning rate tuning"
+
+    def test_no_match_different_concepts(self):
+        """Test that unrelated concepts don't match."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "gradient descent": {"concept": "gradient descent", "occurrence_count": 1}
+        }
+
+        # Completely different concept
+        result = service._find_matching_gap(service, "activation functions", gaps_by_concept)
+        assert result is None
+
+    def test_no_match_insufficient_overlap(self):
+        """Test that concepts with low overlap don't match."""
+        service = MagicMock(spec=ProfileService)
+        service._find_matching_gap = ProfileService._find_matching_gap
+
+        gaps_by_concept = {
+            "understanding deep learning fundamentals": {
+                "concept": "understanding deep learning fundamentals",
+                "occurrence_count": 1,
+            }
+        }
+
+        # Only 1 word in common ("learning"), not enough
+        result = service._find_matching_gap(
+            service, "reinforcement learning basics", gaps_by_concept
+        )
+        assert result is None
+
+    def test_fuzzy_match_updates_existing_gap(self):
+        """Test that fuzzy matching correctly updates existing gaps."""
+        service = MagicMock(spec=ProfileService)
+        service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
+        service._calculate_severity = ProfileService._calculate_severity
+        service.HIGH_SEVERITY_THRESHOLD = 3
+        service.MEDIUM_SEVERITY_THRESHOLD = 2
+
+        chapter_id = str(uuid4())
+
+        # Existing gap with one phrasing
+        current_gaps = [
+            {
+                "concept": "supervised vs unsupervised learning",
+                "severity": "low",
+                "occurrence_count": 1,
+                "related_chapters": [str(uuid4())],
+                "first_seen": "2024-01-01T00:00:00",
+                "last_seen": "2024-01-01T00:00:00",
+            }
+        ]
+
+        # Struggle with similar phrasing
+        assessments = [
+            ConceptAssessment(
+                concept="supervised vs unsupervised learning distinction",
+                understood=False,
+                confidence=0.5,
+            ),
+        ]
+
+        result = service._update_gaps(service, current_gaps, assessments, chapter_id)
+
+        # Should merge into existing gap, not create new one
+        assert len(result) == 1
+        assert result[0]["occurrence_count"] == 2  # Incremented
+        assert result[0]["severity"] == "medium"  # Escalated
+
+
 class TestGapIdentification:
     """Tests for gap identification logic."""
 
@@ -221,6 +392,7 @@ class TestGapIdentification:
         """Test that first struggle creates a low severity gap."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2
@@ -243,6 +415,7 @@ class TestGapIdentification:
         """Test that repeated struggles increase gap severity."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2
@@ -278,6 +451,7 @@ class TestGapIdentification:
         """Test that third struggle creates high severity gap."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2
@@ -311,6 +485,7 @@ class TestGapIdentification:
         """Test that understanding a concept reduces gap severity."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2
@@ -343,6 +518,7 @@ class TestGapIdentification:
         """Test that understanding removes gap when occurrence reaches 0."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2
@@ -374,6 +550,7 @@ class TestGapIdentification:
         """Test that gaps are sorted by severity (high first)."""
         service = MagicMock(spec=ProfileService)
         service._update_gaps = ProfileService._update_gaps
+        service._find_matching_gap = ProfileService._find_matching_gap
         service._calculate_severity = ProfileService._calculate_severity
         service.HIGH_SEVERITY_THRESHOLD = 3
         service.MEDIUM_SEVERITY_THRESHOLD = 2

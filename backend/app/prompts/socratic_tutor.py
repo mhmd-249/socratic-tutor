@@ -184,12 +184,16 @@ Continue building on this discussion. Reference earlier points when relevant.
     return full_prompt
 
 
-def build_initial_greeting_prompt(chapter_context: dict[str, Any]) -> str:
+def build_initial_greeting_prompt(
+    chapter_context: dict[str, Any],
+    learning_profile: dict[str, Any] | None = None,
+) -> str:
     """
     Build a prompt for generating an initial greeting.
 
     Args:
         chapter_context: Information about the current chapter
+        learning_profile: User's learning profile with gaps and strengths (optional)
 
     Returns:
         Prompt for initial greeting
@@ -199,16 +203,52 @@ def build_initial_greeting_prompt(chapter_context: dict[str, Any]) -> str:
 
     concepts_str = ", ".join(key_concepts[:3]) if key_concepts else "the topics in this chapter"
 
-    return f"""Generate a warm, friendly greeting to start a tutoring session on "{chapter_title}".
+    # Build profile context section
+    profile_section = ""
+    if learning_profile:
+        gaps = learning_profile.get("identified_gaps", [])
+        strengths = learning_profile.get("strengths", [])
 
+        if gaps or strengths:
+            profile_section = "\n\n## Student Context (use this to personalize your greeting)\n"
+
+            if gaps:
+                # Extract gap concepts with severity
+                gap_info = []
+                for gap in gaps[:3]:  # Top 3 gaps
+                    if isinstance(gap, dict):
+                        concept = gap.get("concept", "")
+                        severity = gap.get("severity", "low")
+                        if concept:
+                            gap_info.append(f"- {concept} (struggled {severity} severity)")
+                    elif gap:
+                        gap_info.append(f"- {gap}")
+
+                if gap_info:
+                    profile_section += "\n**Known Struggles** (acknowledge gently, offer support):\n"
+                    profile_section += "\n".join(gap_info)
+                    profile_section += "\n"
+
+            if strengths:
+                profile_section += f"\n**Known Strengths**: {', '.join(strengths[:5])}\n"
+
+            profile_section += """
+When relevant, acknowledge their previous struggles supportively. For example:
+- "I know [topic] can be tricky - let's explore it together"
+- "We've worked on [topic] before - let's build on that"
+"""
+
+    return f"""Generate a warm, friendly greeting to start a tutoring session on "{chapter_title}".
+{profile_section}
 Your greeting should:
 1. Welcome the student warmly
 2. Express enthusiasm about the topic
-3. Ask an opening question to assess their current familiarity with {concepts_str}
-4. Keep it brief (2-3 sentences max)
-5. Set a collaborative, encouraging tone
+3. If the student has known struggles related to this chapter, acknowledge them supportively
+4. Ask an opening question to assess their current familiarity with {concepts_str}
+5. Keep it brief (2-4 sentences max)
+6. Set a collaborative, encouraging tone
 
-Do NOT explain concepts yet - just greet and ask an initial assessment question."""
+Do NOT explain concepts yet - just greet, optionally acknowledge past struggles, and ask an initial assessment question."""
 
 
 def build_summary_prompt(messages: list[dict[str, str]]) -> str:

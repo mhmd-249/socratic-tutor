@@ -5,13 +5,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.book import BookResponse
+
 
 class ChapterBase(BaseModel):
     """Base chapter schema with common attributes."""
 
     title: str
     chapter_number: int
-    summary: str
+    summary: str | None = None
     prerequisites: list[uuid.UUID] = []
     key_concepts: list[str] = []
 
@@ -40,3 +42,11 @@ class ChapterResponse(ChapterBase):
     id: uuid.UUID
     book_id: uuid.UUID
     created_at: datetime
+
+
+class ChapterWithBookResponse(ChapterResponse):
+    """Schema for chapter response with nested book information."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    book: BookResponse | None = None

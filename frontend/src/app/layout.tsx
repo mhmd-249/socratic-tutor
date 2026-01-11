@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import QueryProvider from "@/components/providers/QueryProvider";
+import Navigation from "@/components/layout/Navigation";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -16,7 +18,7 @@ const geistMono = localFont({
 
 export const metadata: Metadata = {
   title: "Socratic Tutor",
-  description: "AI-powered Socratic teaching assistant",
+  description: "AI-powered Socratic teaching assistant for learning AI concepts",
 };
 
 export default function RootLayout({
@@ -27,9 +29,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50 min-h-screen`}
       >
-        <AuthProvider>{children}</AuthProvider>
+        <QueryProvider>
+          <AuthProvider>
+            <Navigation />
+            <main>{children}</main>
+          </AuthProvider>
+        </QueryProvider>
       </body>
     </html>
   );

@@ -21,7 +21,9 @@
       "Bash(ls:*)",
       "Bash(chmod:*)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(npm run build:*)",
+      "Bash(poetry run python3:*)"
     ]
   }
 }

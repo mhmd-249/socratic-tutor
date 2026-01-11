@@ -4,10 +4,11 @@
  * Authentication context and provider
  */
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { User as SupabaseUser, Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { apiClient, User } from "@/lib/api";
+import { apiClient } from "@/lib/api";
+import type { User } from "@/types";
 
 interface AuthContextType {
   user: User | null;
@@ -25,12 +26,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Token getter for API client
+  const getToken = useCallback(async (): Promise<string | null> => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token || null;
+  }, []);
+
+  // Set up token getter on mount
+  useEffect(() => {
+    apiClient.setTokenGetter(getToken);
+  }, [getToken]);
+
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session?.user) {
-        syncUserWithBackend(session.user, session.access_token);
+        syncUserWithBackend(session.user);
       } else {
         setLoading(false);
       }
@@ -42,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       if (session?.user) {
-        await syncUserWithBackend(session.user, session.access_token);
+        await syncUserWithBackend(session.user);
       } else {
         setUser(null);
         setLoading(false);
@@ -52,10 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  const syncUserWithBackend = async (
-    supabaseUser: SupabaseUser,
-    token: string
-  ) => {
+  const syncUserWithBackend = async (supabaseUser: SupabaseUser) => {
     try {
       // Sync user with our backend
       const backendUser = await apiClient.authCallback({

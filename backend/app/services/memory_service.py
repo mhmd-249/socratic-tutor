@@ -3,10 +3,9 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -136,6 +135,11 @@ class MemoryService:
         """
         # Build the query using pgvector's cosine distance
         # Lower distance = higher similarity
+        current_chapter_id = current_chapter.id if current_chapter else UUID(int=0)
+
+        # Format embedding as PostgreSQL vector literal
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
         query = text("""
             SELECT
                 cs.id,
@@ -149,7 +153,7 @@ class MemoryService:
                 ch.title as chapter_title,
                 ch.chapter_number,
                 b.title as book_title,
-                1 - (cs.embedding <=> :query_embedding::vector) as similarity
+                1 - (cs.embedding <=> (:query_embedding)::vector) as similarity
             FROM conversation_summaries cs
             JOIN conversations c ON cs.conversation_id = c.id
             JOIN chapters ch ON c.chapter_id = ch.id
@@ -157,21 +161,16 @@ class MemoryService:
             WHERE c.user_id = :user_id
               AND cs.embedding IS NOT NULL
               AND c.chapter_id != :current_chapter_id
-            ORDER BY cs.embedding <=> :query_embedding::vector
+            ORDER BY cs.embedding <=> (:query_embedding)::vector
             LIMIT :limit
-        """)
-
-        current_chapter_id = current_chapter.id if current_chapter else UUID(int=0)
-
-        result = await self.session.execute(
-            query,
-            {
-                "user_id": user_id,
-                "query_embedding": str(query_embedding),
-                "current_chapter_id": current_chapter_id,
-                "limit": max_results,
-            },
+        """).bindparams(
+            bindparam("user_id", value=user_id),
+            bindparam("query_embedding", value=embedding_str),
+            bindparam("current_chapter_id", value=current_chapter_id),
+            bindparam("limit", value=max_results),
         )
+
+        result = await self.session.execute(query)
 
         rows = result.fetchall()
         memories = []
@@ -439,11 +438,11 @@ class MemoryService:
                 WHERE c.user_id = :user_id
                   AND :concept = ANY(cs.concepts_struggled)
             )
-        """)
-
-        result = await self.session.execute(
-            query,
-            {"user_id": user_id, "concept": concept},
+        """).bindparams(
+            bindparam("user_id", value=user_id),
+            bindparam("concept", value=concept),
         )
+
+        result = await self.session.execute(query)
 
         return result.scalar() or False

@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chunk import Chunk
@@ -62,29 +62,27 @@ class ChunkRepository(BaseRepository[Chunk]):
                 """
                 SELECT * FROM chunks
                 WHERE chapter_id = :chapter_id
-                ORDER BY embedding <-> :embedding::vector
+                ORDER BY embedding <-> (:embedding)::vector
                 LIMIT :limit
                 """
+            ).bindparams(
+                bindparam("chapter_id", value=chapter_id),
+                bindparam("embedding", value=embedding_str),
+                bindparam("limit", value=limit),
             )
-            result = await self.session.execute(
-                query,
-                {
-                    "chapter_id": chapter_id,
-                    "embedding": embedding_str,
-                    "limit": limit,
-                },
-            )
+            result = await self.session.execute(query)
         else:
             query = text(
                 """
                 SELECT * FROM chunks
-                ORDER BY embedding <-> :embedding::vector
+                ORDER BY embedding <-> (:embedding)::vector
                 LIMIT :limit
                 """
+            ).bindparams(
+                bindparam("embedding", value=embedding_str),
+                bindparam("limit", value=limit),
             )
-            result = await self.session.execute(
-                query, {"embedding": embedding_str, "limit": limit}
-            )
+            result = await self.session.execute(query)
 
         # Convert rows to Chunk instances
         chunks = []

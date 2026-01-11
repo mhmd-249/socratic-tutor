@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chunk import Chunk
@@ -379,18 +379,15 @@ class RAGService:
             INNER JOIN books b ON ch.book_id = b.id
             ORDER BY c.combined_score DESC
             LIMIT :limit
-        """)
-
-        # Execute with named parameters (SQLAlchemy with asyncpg)
-        result = await self.session.execute(
-            query_sql,
-            {
-                "query": query,
-                "semantic_weight": self.semantic_weight,
-                "keyword_weight": self.keyword_weight,
-                "limit": limit
-            }
+        """).bindparams(
+            bindparam("query", value=query),
+            bindparam("semantic_weight", value=self.semantic_weight),
+            bindparam("keyword_weight", value=self.keyword_weight),
+            bindparam("limit", value=limit),
         )
+
+        # Execute with bound parameters (SQLAlchemy with asyncpg)
+        result = await self.session.execute(query_sql)
         rows = result.fetchall()
 
         retrieved_chunks = []

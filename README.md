@@ -112,4 +112,4 @@ Run `make help` to see all available commands:
 
 ## License
 
-[Your License Here]
+Open

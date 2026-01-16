@@ -25,7 +25,8 @@
       "Bash(npm run build:*)",
       "Bash(poetry run python3:*)",
       "Bash(npm run lint)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(grep:*)"
     ]
   }
 }
